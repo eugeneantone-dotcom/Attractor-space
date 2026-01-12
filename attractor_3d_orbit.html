@@ -8,7 +8,7 @@
     html, body { margin:0; height:100%; background:#000; overflow:hidden; }
     canvas { display:block; }
     .hud{
-      position:fixed; left:12px; top:10px; color:#cfcfcf;
+      position:fixed; left:12px; top:10px; color:#c10900;
       font:12px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       user-select:none; opacity:.92;
       text-shadow: 0 0 10px rgba(0,0,0,.9);
@@ -195,7 +195,7 @@ Space: pause | R: reset | C: clear trails`;
       PZ[i] = p.depth;
     }
 
-    ctx.strokeStyle = `rgba(200, 235, 255, ${LINE_ALPHA})`;
+    ctx.strokeStyle = `rgba(212, 160, 23, ${LINE_ALPHA})`;
     ctx.stroke();
     ctx.globalCompositeOperation = 'source-over';
 
