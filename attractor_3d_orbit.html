@@ -3,15 +3,16 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Attractor Particle Space</title>
+  <title>3D Lorenz Attractor (Orbit Rotate)</title>
   <style>
     html, body { margin:0; height:100%; background:#000; overflow:hidden; }
     canvas { display:block; }
     .hud{
       position:fixed; left:12px; top:10px; color:#cfcfcf;
       font:12px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      user-select:none; opacity:.9;
-      text-shadow: 0 0 8px rgba(0,0,0,.8);
+      user-select:none; opacity:.92;
+      text-shadow: 0 0 10px rgba(0,0,0,.9);
+      white-space:pre;
     }
   </style>
 </head>
@@ -24,201 +25,231 @@
   const canvas = document.getElementById('c');
   const ctx = canvas.getContext('2d', { alpha: false });
 
-  // ======= Tunables =======
-  const N = 18000;          // particle count
-  const DT = 0.016;         // integration timestep (seconds-ish)
-  const DAMP = 0.985;       // velocity damping
-  const SPEED_LIMIT = 4.0;  // clamp speed (px/frame)
-  const FADE = 0.08;        // trail persistence (higher = shorter trails)
-  const EPS = 60.0;         // softening to avoid singularities
-  const POWER = 1.35;       // field falloff power (1..2 feels good)
-  const SWIRL = 0.65;       // adds a curl-like component around attractors
-  const JITTER = 0.12;      // tiny noise to keep motion lively
+  // ========= Tunables =========
+  const N = 7000;                 // particles (raise if your machine is strong)
+  const FADE = 0.085;             // trail persistence (higher = shorter trails)
+  const LINE_ALPHA = 0.06;        // trail brightness
+  const H = 0.006;                // integration dt
+  const SUBSTEPS = 2;             // integration substeps per frame
+  const JITTER = 0.000;           // optional tiny noise in state-space
 
-  // ======= State =======
-  let W = 0, H = 0, paused = false;
+  // Lorenz parameters (classic chaotic)
+  const SIGMA = 10.0;
+  const RHO   = 28.0;
+  const BETA  = 8/3;
 
-  // typed arrays for speed
-  const px = new Float32Array(N);
-  const py = new Float32Array(N);
-  const vx = new Float32Array(N);
-  const vy = new Float32Array(N);
+  // Camera / projection
+  let yaw = 0.6;                  // rotate around Y
+  let pitch = -0.35;              // rotate around X
+  const CAM_RADIUS = 85;          // fixed distance (no linear motion)
+  const FOV = 55 * Math.PI/180;   // perspective
+  const NEAR = 0.1;
 
-  // Attractors: {x,y,strength} (positive attracts, negative repels)
-  const attractors = [];
+  // ========= State =========
+  let W = 0, Hpx = 0, DPR = 1;
+  let paused = false;
+
+  // 3D state per particle
+  const X = new Float32Array(N);
+  const Y = new Float32Array(N);
+  const Z = new Float32Array(N);
+
+  // previous 2D projected coords (for trails)
+  const PX = new Float32Array(N);
+  const PY = new Float32Array(N);
+  const PZ = new Float32Array(N); // previous depth (for alpha modulation)
+  const hasPrev = new Uint8Array(N);
 
   function resize() {
-    W = canvas.width  = Math.floor(window.innerWidth * devicePixelRatio);
-    H = canvas.height = Math.floor(window.innerHeight * devicePixelRatio);
+    DPR = devicePixelRatio || 1;
+    W = canvas.width  = Math.floor(innerWidth  * DPR);
+    Hpx = canvas.height = Math.floor(innerHeight * DPR);
     ctx.setTransform(1,0,0,1,0,0);
-    ctx.fillStyle = '#000';
-    ctx.fillRect(0,0,W,H);
-  }
-
-  function rand(min, max) { return min + Math.random() * (max - min); }
-
-  function seedParticles() {
-    for (let i = 0; i < N; i++) {
-      px[i] = rand(0, W);
-      py[i] = rand(0, H);
-      vx[i] = rand(-0.5, 0.5);
-      vy[i] = rand(-0.5, 0.5);
-    }
-  }
-
-  function addAttractor(x, y, strength) {
-    attractors.push({ x, y, strength });
-  }
-
-  function randomAttractors(k = 4) {
-    attractors.length = 0;
-    for (let i = 0; i < k; i++) {
-      const s = (Math.random() < 0.25 ? -1 : 1) * rand(1800, 5200);
-      addAttractor(rand(0.2*W, 0.8*W), rand(0.2*H, 0.8*H), s);
-    }
-  }
-
-  // Remove nearest attractor within radius
-  function removeNearest(x, y) {
-    if (!attractors.length) return;
-    let best = -1, bestD = Infinity;
-    for (let i = 0; i < attractors.length; i++) {
-      const dx = attractors[i].x - x, dy = attractors[i].y - y;
-      const d2 = dx*dx + dy*dy;
-      if (d2 < bestD) { bestD = d2; best = i; }
-    }
-    if (best >= 0 && bestD < (120*devicePixelRatio)*(120*devicePixelRatio)) {
-      attractors.splice(best, 1);
-    }
+    clearTrails();
   }
 
   function clearTrails() {
     ctx.fillStyle = '#000';
-    ctx.fillRect(0,0,W,H);
+    ctx.fillRect(0, 0, W, Hpx);
   }
 
-  function drawAttractors() {
-    for (const a of attractors) {
-      const r = 6 * devicePixelRatio;
-      ctx.beginPath();
-      ctx.arc(a.x, a.y, r, 0, Math.PI*2);
-      ctx.fillStyle = a.strength >= 0 ? 'rgba(120,220,255,0.85)' : 'rgba(255,120,160,0.85)';
-      ctx.fill();
-    }
-  }
+  function rand(min, max) { return min + Math.random() * (max - min); }
 
-  function step() {
-    // fade frame (keeps trails)
-    ctx.fillStyle = `rgba(0,0,0,${FADE})`;
-    ctx.fillRect(0,0,W,H);
-
-    // draw particles as tiny points
-    ctx.globalCompositeOperation = 'lighter';
-    ctx.fillStyle = 'rgba(210, 240, 255, 0.08)';
-
-    const k = attractors.length;
-
+  function resetParticles() {
+    // Seed near the Lorenz attractor basin; center is at origin in state-space.
     for (let i = 0; i < N; i++) {
-      let ax = 0, ay = 0;
-
-      // sum vector field contributions
-      for (let j = 0; j < k; j++) {
-        const a = attractors[j];
-        const dx = a.x - px[i];
-        const dy = a.y - py[i];
-
-        // softened distance
-        const d2 = dx*dx + dy*dy + EPS;
-        const d = Math.sqrt(d2);
-
-        // inverse power falloff
-        const inv = a.strength / Math.pow(d, POWER);
-
-        // base attraction/repulsion
-        ax += inv * (dx / (d + 1e-6));
-        ay += inv * (dy / (d + 1e-6));
-
-        // swirl (perpendicular) to create curved streamlines
-        ax += SWIRL * inv * (-dy / (d + 1e-6));
-        ay += SWIRL * inv * ( dx / (d + 1e-6));
-      }
-
-      // integrate velocity
-      vx[i] = (vx[i] + ax * DT) * DAMP + rand(-JITTER, JITTER);
-      vy[i] = (vy[i] + ay * DT) * DAMP + rand(-JITTER, JITTER);
-
-      // clamp speed
-      const sp2 = vx[i]*vx[i] + vy[i]*vy[i];
-      if (sp2 > SPEED_LIMIT*SPEED_LIMIT) {
-        const s = SPEED_LIMIT / Math.sqrt(sp2);
-        vx[i] *= s; vy[i] *= s;
-      }
-
-      // integrate position
-      px[i] += vx[i];
-      py[i] += vy[i];
-
-      // wrap edges (nice continuous flow)
-      if (px[i] < 0) px[i] += W; else if (px[i] >= W) px[i] -= W;
-      if (py[i] < 0) py[i] += H; else if (py[i] >= H) py[i] -= H;
-
-      // draw
-      ctx.fillRect(px[i], py[i], 1*devicePixelRatio, 1*devicePixelRatio);
+      X[i] = rand(-12, 12);
+      Y[i] = rand(-12, 12);
+      Z[i] = rand(  8, 32);
+      hasPrev[i] = 0;
     }
+  }
 
-    ctx.globalCompositeOperation = 'source-over';
-    drawAttractors();
-    updateHUD();
+  // ===== Lorenz derivatives =====
+  function lorenzDx(x, y, z) { return SIGMA * (y - x); }
+  function lorenzDy(x, y, z) { return x * (RHO - z) - y; }
+  function lorenzDz(x, y, z) { return x * y - BETA * z; }
+
+  // ===== RK4 step =====
+  function rk4Step(i, h) {
+    const x0 = X[i], y0 = Y[i], z0 = Z[i];
+
+    const k1x = lorenzDx(x0,y0,z0);
+    const k1y = lorenzDy(x0,y0,z0);
+    const k1z = lorenzDz(x0,y0,z0);
+
+    const x1 = x0 + 0.5*h*k1x, y1 = y0 + 0.5*h*k1y, z1 = z0 + 0.5*h*k1z;
+    const k2x = lorenzDx(x1,y1,z1);
+    const k2y = lorenzDy(x1,y1,z1);
+    const k2z = lorenzDz(x1,y1,z1);
+
+    const x2 = x0 + 0.5*h*k2x, y2 = y0 + 0.5*h*k2y, z2 = z0 + 0.5*h*k2z;
+    const k3x = lorenzDx(x2,y2,z2);
+    const k3y = lorenzDy(x2,y2,z2);
+    const k3z = lorenzDz(x2,y2,z2);
+
+    const x3 = x0 + h*k3x, y3 = y0 + h*k3y, z3 = z0 + h*k3z;
+    const k4x = lorenzDx(x3,y3,z3);
+    const k4y = lorenzDy(x3,y3,z3);
+    const k4z = lorenzDz(x3,y3,z3);
+
+    X[i] = x0 + (h/6)*(k1x + 2*k2x + 2*k3x + k4x) + (JITTER ? rand(-JITTER,JITTER) : 0);
+    Y[i] = y0 + (h/6)*(k1y + 2*k2y + 2*k3y + k4y) + (JITTER ? rand(-JITTER,JITTER) : 0);
+    Z[i] = z0 + (h/6)*(k1z + 2*k2z + 2*k3z + k4z) + (JITTER ? rand(-JITTER,JITTER) : 0);
+  }
+
+  // ===== Camera transform (orbit around origin; no translation/pan by user) =====
+  function projectPoint(x, y, z) {
+    // Rotate world by yaw (Y axis) then pitch (X axis).
+    // Equivalent to rotating camera oppositely around origin, with fixed radius.
+    const cy = Math.cos(yaw), sy = Math.sin(yaw);
+    const cx = Math.cos(pitch), sx = Math.sin(pitch);
+
+    // yaw: around Y
+    let x1 =  cy*x + sy*z;
+    let y1 =  y;
+    let z1 = -sy*x + cy*z;
+
+    // pitch: around X
+    let x2 = x1;
+    let y2 =  cx*y1 - sx*z1;
+    let z2 =  sx*y1 + cx*z1;
+
+    // move camera back (fixed radius). Camera looks toward origin.
+    // We can treat this as translating points forward by +CAM_RADIUS in z.
+    const zCam = z2 + CAM_RADIUS;
+
+    if (zCam <= NEAR) return null;
+
+    // perspective projection
+    const f = 1 / Math.tan(FOV * 0.5);
+    const ndcX = (x2 * f) / zCam;
+    const ndcY = (y2 * f) / zCam;
+
+    const sx2d = (ndcX * 0.5 + 0.5) * W;
+    const sy2d = (-ndcY * 0.5 + 0.5) * Hpx;
+
+    return { sx: sx2d, sy: sy2d, depth: zCam };
   }
 
   function updateHUD() {
-    const hud = document.getElementById('hud');
-    hud.textContent =
-`Attractor Particle Space
-particles: ${N}
-attractors: ${attractors.length}
-Click: attractor | Alt+Click: repeller | Shift+Click: remove nearest
-R: randomize | Space: pause | C: clear`;
+    document.getElementById('hud').textContent =
+`3D Lorenz Attractor @ origin (0,0,0)
+Particles: ${N}
+Rotate: Left-click + drag (yaw/pitch). No pan/translation.
+Space: pause | R: reset | C: clear trails`;
   }
 
-  function loop() {
-    if (!paused) step();
-    requestAnimationFrame(loop);
-  }
+  function frame() {
+    // fade background
+    ctx.fillStyle = `rgba(0,0,0,${FADE})`;
+    ctx.fillRect(0,0,W,Hpx);
 
-  // ======= Events =======
-  window.addEventListener('resize', () => {
-    resize();
-    clearTrails();
-    // keep attractors inside bounds after resize
-    for (const a of attractors) {
-      a.x = Math.max(0, Math.min(W, a.x));
-      a.y = Math.max(0, Math.min(H, a.y));
+    // draw trails
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.lineWidth = 1 * DPR;
+    ctx.beginPath();
+
+    if (!paused) {
+      for (let s = 0; s < SUBSTEPS; s++) {
+        for (let i = 0; i < N; i++) rk4Step(i, H);
+      }
     }
+
+    // Draw: line from prev projected position to current.
+    // We modulate opacity a bit by depth so near points pop more.
+    for (let i = 0; i < N; i++) {
+      const p = projectPoint(X[i], Y[i], Z[i]);
+      if (!p) { hasPrev[i] = 0; continue; }
+
+      if (hasPrev[i]) {
+        // We’ll draw a lot of segments in one path; cheap + pretty.
+        ctx.moveTo(PX[i], PY[i]);
+        ctx.lineTo(p.sx, p.sy);
+      } else {
+        hasPrev[i] = 1;
+      }
+
+      PX[i] = p.sx;
+      PY[i] = p.sy;
+      PZ[i] = p.depth;
+    }
+
+    ctx.strokeStyle = `rgba(200, 235, 255, ${LINE_ALPHA})`;
+    ctx.stroke();
+    ctx.globalCompositeOperation = 'source-over';
+
+    updateHUD();
+    requestAnimationFrame(frame);
+  }
+
+  // ========= Interaction: rotate only (no translation) =========
+  let dragging = false;
+  let lastX = 0, lastY = 0;
+
+  canvas.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    dragging = true;
+    lastX = e.clientX;
+    lastY = e.clientY;
+    canvas.setPointerCapture(e.pointerId);
+  });
+
+  canvas.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    const dx = e.clientX - lastX;
+    const dy = e.clientY - lastY;
+    lastX = e.clientX;
+    lastY = e.clientY;
+
+    const sens = 0.0065; // rotation sensitivity
+    yaw   += dx * sens;
+    pitch += dy * sens;
+
+    // clamp pitch to avoid flipping
+    const lim = Math.PI/2 - 0.02;
+    if (pitch > lim) pitch = lim;
+    if (pitch < -lim) pitch = -lim;
+  });
+
+  canvas.addEventListener('pointerup', (e) => {
+    dragging = false;
+    try { canvas.releasePointerCapture(e.pointerId); } catch {}
   });
 
   window.addEventListener('keydown', (e) => {
+    const k = e.key.toLowerCase();
     if (e.key === ' ') { paused = !paused; e.preventDefault(); }
-    if (e.key.toLowerCase() === 'r') { randomAttractors(4 + (Math.random()*3|0)); }
-    if (e.key.toLowerCase() === 'c') { clearTrails(); }
+    if (k === 'r') resetParticles();
+    if (k === 'c') clearTrails();
   });
 
-  canvas.addEventListener('pointerdown', (e) => {
-    const rect = canvas.getBoundingClientRect();
-    const x = (e.clientX - rect.left) * devicePixelRatio;
-    const y = (e.clientY - rect.top) * devicePixelRatio;
+  window.addEventListener('resize', resize);
 
-    if (e.shiftKey) return removeNearest(x, y);
-
-    const strength = (e.altKey ? -1 : 1) * rand(2500, 6500);
-    addAttractor(x, y, strength);
-  });
-
-  // ======= Init =======
+  // ========= Init =========
   resize();
-  seedParticles();
-  randomAttractors(5);
-  loop();
+  resetParticles();
+  frame();
 })();
 </script>
 </body>
