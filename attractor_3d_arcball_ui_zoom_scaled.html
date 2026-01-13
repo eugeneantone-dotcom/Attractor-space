@@ -230,7 +230,7 @@ Keys: Space pause, R reset, C clear</div>
     // Normalize to [-1,1] using a trackball radius
     const r = 0.92 * Math.min(rect.width, rect.height) * 0.5;
     const x = (clientX - cx) / r;
-    const y = (cy - clientY) / r; // invert Y so dragging down feels like rolling sphere down
+    const y = (clientY - cy) / r; // invert Y so dragging down feels like rolling sphere down
 
     const d2 = x*x + y*y;
     if (d2 <= 1.0) {
