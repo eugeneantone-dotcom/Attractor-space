@@ -6,7 +6,15 @@
   <title>3D Strange Attractors (Arcball + UI + Zoom + Scaling + Size)</title>
   <style>
     html, body { margin:0; height:100%; background:#000; overflow:hidden; }
-    canvas { display:block; }
+    canvas { 
+    display:block; 
+    width:100vw; 
+    height:100vh; 
+    touch-action:none;
+    }
+    @supports (height: 100dvh) {
+      canvas { height: 100dvh; }
+    }
     .ui {
       position: fixed; left: 12px; top: 12px;
       color: #d8d8d8;
