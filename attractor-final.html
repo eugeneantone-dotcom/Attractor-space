@@ -449,7 +449,7 @@ Keys: Space pause, R reset, C clear</div>
 
   particlesSlider.addEventListener('input', () => {
     const oldN = activeN;
-    const newN = clamp(Number(particlesSlider.value), 500, MAX_N);
+    const newN = clamp(Number(particlesSlider.value), 10, MAX_N);
     activeN = newN;
     particlesVal.textContent = String(activeN);
     if (newN > oldN) ensureNewParticlesSeeded(oldN, newN);
