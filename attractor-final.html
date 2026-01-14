@@ -94,6 +94,12 @@
   </div>
 
   <div class="row">
+    <label>Opacity</label>
+    <input id="opacity" type="range" min="0.005" max="0.25" step="0.005" value="0.060" />
+    <div class="val" id="opacityVal">0.060</div>
+  </div>
+
+  <div class="row">
     <label>Zoom</label>
     <div class="val" id="zoomVal">85.0</div>
   </div>
@@ -125,11 +131,15 @@ Keys: Space pause, R reset, C clear</div>
   let paused = false;
 
   let FADE = 0.085;
-  const LINE_ALPHA = 0.060;
+  let LINE_ALPHA = 0.060; // controlled by opacity slider
 
   // Particle "size" (line width of trails)
   let particleSizePx = 1.0;
 
+  // Particle Opacity
+  const opacitySlider = document.getElementById('opacity');
+  const opacityVal = document.getElementById('opacityVal');
+  
   // Camera (zoom via wheel modifies camRadius)
   let camRadius = 85;
   const CAM_MIN = 18;
@@ -478,6 +488,11 @@ Keys: Space pause, R reset, C clear</div>
     psizeVal.textContent = particleSizePx.toFixed(1) + 'px';
   });
 
+  opacitySlider.addEventListener('input', () => {
+    LINE_ALPHA = Number(opacitySlider.value);
+    opacityVal.textContent = LINE_ALPHA.toFixed(3);
+  });
+
   pauseBtn.addEventListener('click', () => { paused = !paused; });
   resetBtn.addEventListener('click', () => resetParticles(true));
   clearBtn.addEventListener('click', () => clearTrails());
@@ -502,7 +517,8 @@ Keys: Space pause, R reset, C clear</div>
   particleSizePx = Number(psizeSlider.value);
   psizeVal.textContent = particleSizePx.toFixed(1) + 'px';
   document.getElementById('zoomVal').textContent = camRadius.toFixed(1);
-
+  LINE_ALPHA = Number(opacitySlider.value);
+  opacityVal.textContent = LINE_ALPHA.toFixed(3);
   loop();
 })();
 </script>
